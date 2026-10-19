@@ -69,15 +69,18 @@ dialog h2{margin-top:0}
     </div>
   </header>
   <div id="app"></div>
-  <p class="foot">Veriler bu tarayıcıda saklanır. Kaybetmemek için ara sıra “Excel’e aktar” ile yedek al.</p>
+  <p class="foot">Kayıtlar yalnızca bu tarayıcıda saklanır, kimseyle paylaşılmaz. Kaybetmemek için ara sıra “Excel’e aktar” ile yedek al.</p>
 </div>
 <dialog id="dlg"></dialog>
 <div id="toast" hidden></div>
 <script>
 const KEY="musteri-defteri-v1";
-let db={firms:[],visits:[]},view="follow",cur=null,q="",fc="",fs="",warn=false,yes=null,tt;
-try{const r=localStorage.getItem(KEY);if(r){const d=JSON.parse(r);if(d&&Array.isArray(d.firms)&&Array.isArray(d.visits))db=d}}catch(e){warn=true}
-const persist=()=>{try{localStorage.setItem(KEY,JSON.stringify(db))}catch(e){warn=true;toast("Tarayıcıya kaydedilemedi. Excel yedeği al.")}};
+let db={firms:[],visits:[]},view="follow",cur=null,q="",fc="",fs="",warn=false,yes=null,tt,col=null,smp=null,chain=Promise.resolve();
+const loadLocal=()=>{try{const r=localStorage.getItem(KEY);if(r){const d=JSON.parse(r);if(d&&Array.isArray(d.firms)&&Array.isArray(d.visits))db=d}}catch(e){warn=true}};
+const persist=(ids=[])=>{
+  if(!col){try{localStorage.setItem(KEY,JSON.stringify(db))}catch(e){warn=true;toast("Tarayıcıya kaydedilemedi. Excel yedeği al.")}return}
+  ids.forEach(id=>{chain=chain.then(async()=>{const f=firm(id),d=col.doc("firm_"+id);if(f)await d.set(JSON.parse(JSON.stringify({...f,visits:vis(id)})));else await d.delete()}).catch(()=>toast("Buluta kaydedilemedi. Bağlantını kontrol et."))})
+};
 const $=s=>document.querySelector(s);
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -168,7 +171,7 @@ function ask(msg,fn){yes=fn;showDlg(`<p>${msg}</p><div class="acts"><button oncl
 
 function firmForm(id){
   const f=id?firm(id):{};
-  showDlg(`<h2>${id?"Firmayı düzenle":"Yeni firma"}</h2>${fld("f_name","Firma adı *",f.name)}
+  showDlg(`<h2>${id?"Firmayı düzenle":"Yeni firma"}</h2>${smp?`<div class="acts" style="margin:0 0 12px"><button class="pri" onclick="document.getElementById('card').click()">Kartvizit tara</button><input type="file" id="card" accept="image/*" hidden onchange="scanCard(this.files[0]);this.value=''"><span class="sub" id="scs"></span></div>`:""}${fld("f_name","Firma adı *",f.name)}
   <div class="row">${fld("f_contact","Yetkili kişi",f.contact)}${fld("f_title","Unvan",f.title)}</div>
   <div class="row">${fld("f_phone","Telefon",f.phone,"tel")}${fld("f_email","E-posta",f.email,"email")}</div>
   <div class="row">${fld("f_city","Şehir",f.city)}${fld("f_produces","Ne üretiyor",f.produces,"text",'list="prod"')}</div>
@@ -183,10 +186,10 @@ function saveFirm(id){
   const o={name:g("f_name"),contact:g("f_contact"),title:g("f_title"),phone:g("f_phone"),email:g("f_email"),city:g("f_city"),produces:g("f_produces"),address:g("f_address"),capacity:g("f_capacity"),supplier:g("f_supplier"),notes:g("f_notes")};
   let fid=id;
   if(id)Object.assign(firm(id),o);else{fid=uid();db.firms.push({id:fid,...o})}
-  persist();closeDlg();
+  persist([fid]);closeDlg();
   id?render():openFirm(fid);
 }
-function delFirm(id){ask("Bu firma ve tüm ziyaretleri silinsin mi?",()=>{db.visits=db.visits.filter(v=>v.firmId!==id);db.firms=db.firms.filter(f=>f.id!==id);persist();go("firms")})}
+function delFirm(id){ask("Bu firma ve tüm ziyaretleri silinsin mi?",()=>{db.visits=db.visits.filter(v=>v.firmId!==id);db.firms=db.firms.filter(f=>f.id!==id);persist([id]);go("firms")})}
 
 function visitForm(fid,vid){
   const v=vid?db.visits.find(x=>x.id===vid):{date:T,status:"warm"};
@@ -203,11 +206,34 @@ function saveVisit(fid,vid){
   const o={firmId:fid,date:g("v_date")||T,status:g("v_status"),products:g("v_products"),qty:g("v_qty"),notes:g("v_notes"),next:g("v_next"),followDate:g("v_follow")};
   if(vid){const v=db.visits.find(x=>x.id===vid),ch=v.followDate!==o.followDate;Object.assign(v,o);if(ch)v.done=false}
   else{db.visits.forEach(v=>{if(v.firmId===fid&&v.followDate)v.done=true});db.visits.push({id:uid(),...o,done:false})}
-  persist();closeDlg();render();
+  persist([fid]);closeDlg();render();
 }
-function doneV(id){db.visits.find(v=>v.id===id).done=true;persist();render()}
-function delVisit(id){ask("Bu ziyaret kaydı silinsin mi?",()=>{db.visits=db.visits.filter(v=>v.id!==id);persist();render()})}
+function doneV(id){const v=db.visits.find(x=>x.id===id);v.done=true;persist([v.firmId]);render()}
+function delVisit(id){ask("Bu ziyaret kaydı silinsin mi?",()=>{const v=db.visits.find(x=>x.id===id);db.visits=db.visits.filter(x=>x.id!==id);persist([v.firmId]);render()})}
 
+function loadScript(src){return new Promise((ok,no)=>{const e=document.createElement("script");e.src=src;e.onload=ok;e.onerror=no;document.head.appendChild(e)})}
+function parseCard(t){
+  const em=(t.match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/)||[""])[0];
+  const ph=[...new Set((t.match(/\+?\d[\d\s().-]{7,}\d/g)||[]).map(x=>x.replace(/\s+/g," ").trim()))].slice(0,2).join(", ");
+  const web=(t.match(/(?:https?:\/\/)?www\.[^\s,;]+/i)||[""])[0];
+  const L=t.split("\n").map(x=>x.trim()).filter(x=>x.length>2&&/[A-Za-zÇĞİÖŞÜçğıöşü]{3}/.test(x)&&!/@|www\.|https?:/i.test(x)&&!/\d[\d\s().-]{7,}\d/.test(x));
+  const put=(id,v)=>{const e=$("#"+id);if(e&&v)e.value=v};
+  put("f_name",L[0]);put("f_contact",L[1]);put("f_title",L[2]);put("f_phone",ph);put("f_email",em);put("f_address",L.slice(3).join(", "));
+  if(web){const n=$("#f_notes");if(n&&!n.value.includes(web))n.value=(n.value?n.value+"\n":"")+"Web: "+web}
+}
+async function scanCard(file){
+  const s=$("#scs")||{};
+  if(!file)return;
+  s.textContent="Okunuyor… (ilk seferde dil dosyası indiği için uzun sürebilir)";
+  try{
+    if(!window.Tesseract)await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
+    const b=await createImageBitmap(file),k=Math.min(1,2000/Math.max(b.width,b.height)),c=document.createElement("canvas");
+    c.width=Math.round(b.width*k);c.height=Math.round(b.height*k);c.getContext("2d").drawImage(b,0,0,c.width,c.height);
+    const r=await Tesseract.recognize(c,"tur+eng",{logger:m=>{if(m.status==="recognizing text")s.textContent="Okunuyor… %"+Math.round(m.progress*100)}});
+    parseCard(r.data.text);
+    s.textContent="Okundu. Alanları kontrol edip düzelt, sonra kaydet."
+  }catch(e){s.textContent="Kart okunamadı. Aydınlık ve düz bir fotoğraf dene, internet bağlantını kontrol et."}
+}
 const CF=[["Yetkili","contact"],["Unvan","title"],["Telefon","phone"],["E-posta","email"],["Şehir","city"],["Adres","address"],["Ne üretiyor","produces"],["Kapasite","capacity"],["Şu an aldığı yer","supplier"],["Notlar","notes"]];
 const CV=[["Tarih","date"],["Durum","status"],["İlgilendiği ürünler","products"],["Miktar","qty"],["Görüşme notu","notes"],["Sonraki adım","next"],["Takip tarihi","followDate"],["Takip tamam","done"]];
 async function exportX(){
@@ -234,21 +260,23 @@ async function importX(file){
     const rows=n=>wb.Sheets[n]?XLSX.utils.sheet_to_json(wb.Sheets[n],{defval:""}):[];
     const s=x=>x instanceof Date?"":String(x??"").trim();
     const find=n=>db.firms.find(f=>f.name.toLocaleLowerCase("tr")===n.toLocaleLowerCase("tr"));
-    let nf=0,nv=0;
-    rows("Firmalar").forEach(r=>{const n=s(r["Firma"]);if(!n||find(n))return;const f={id:uid(),name:n};CF.forEach(([h,k])=>f[k]=s(r[h]));db.firms.push(f);nf++});
+    let nf=0,nv=0;const tc=new Set();
+    rows("Firmalar").forEach(r=>{const n=s(r["Firma"]);if(!n||find(n))return;const f={id:uid(),name:n};CF.forEach(([h,k])=>f[k]=s(r[h]));db.firms.push(f);tc.add(f.id);nf++});
     const inv={"sıcak":"hot","ılık":"warm","soğuk":"cold"};
     rows("Ziyaretler").forEach(r=>{
       const n=s(r["Firma"]);if(!n)return;
-      let f=find(n);if(!f){f={id:uid(),name:n};db.firms.push(f);nf++}
+      let f=find(n);if(!f){f={id:uid(),name:n};db.firms.push(f);tc.add(f.id);nf++}
       const v={id:uid(),firmId:f.id,date:nd(r["Tarih"])||T,status:inv[s(r["Durum"]).toLocaleLowerCase("tr")]||"warm",products:s(r["İlgilendiği ürünler"]),qty:s(r["Miktar"]),notes:s(r["Görüşme notu"]),next:s(r["Sonraki adım"]),followDate:nd(r["Takip tarihi"]),done:s(r["Takip tamam"]).toLocaleLowerCase("tr")==="evet"};
       const key=x=>[x.firmId,x.date,x.products,x.notes].join("|");
       if(db.visits.some(x=>key(x)===key(v)))return;
-      db.visits.push(v);nv++;
+      db.visits.push(v);tc.add(f.id);nv++;
     });
-    persist();render();toast(`${nf} firma, ${nv} ziyaret eklendi.`);
+    persist([...tc]);render();toast(`${nf} firma, ${nv} ziyaret eklendi.`);
   }catch(e){toast("Dosya okunamadı. Uygulamadan aktarılmış bir .xlsx seç.")}
 }
-render();
+async function init(){loadLocal();smp=true}
+$("#app").innerHTML=empty("Kayıtlar yükleniyor…");
+init().then(render);
 </script>
 </body>
 </html>
